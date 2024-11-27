@@ -112,6 +112,8 @@ for idx, path in enumerate(images, 1):
     # Whether or not to perform the split/merge action
     do_split = img_height > args.tile_size or img_width > args.tile_size
 
+    exampleImage = img
+
     ## Process the Image ##
     if do_split:
         rlts = ops.esrgan_launcher_split_merge(img, process, models, scale_factor=1, tile_size=args.tile_size)
@@ -147,21 +149,26 @@ for idx, path in enumerate(images, 1):
 import coremltools as ct
 
 def convert_to_coreml(torch_model, model_name):
+    example_input = torch.rand(1, 3, 64, 64)    # Example input, needed by jit tracer.
+    traced_model = torch.jit.trace(torch_model, example_input)
     # Convert the model
     # https://apple.github.io/coremltools/source/coremltools.converters.convert.html
     coreml_model = ct.convert(
-        torch_model, # Torch Exported Model
+        traced_model, # Torch Exported Model
+        inputs=[ct.ImageType(name="Image Texture", shape=example_input.shape)],
+        outputs=[ct.TensorType(name="Texture Map")],
         # skip_model_load=True,
-        # source='pytorch',  # Specify the source framework
+        source='pytorch',  # Specify the source framework
+        convert_to='mlprogram',
         minimum_deployment_target=ct.target.macOS15
     ) 
 
     # Save model in a Core ML `mlmodel` file
-    coreml_model.save(f"{model_name}.mlmodel")
-    print(f"Model saved as {model_name}.mlmodel")
+    coreml_model.save(f"{model_name}.mlpackage")
+    print(f"Model saved as {model_name}.mlpackage")
 
     # Load the saved model
-    loaded_model = ct.models.MLModel(f"{model_name}.mlmodel")
+    loaded_model = ct.models.MLModel(f"{model_name}.mlpackage")
 
 def set_metadata(model):
     # Set a short description for the Xcode UI
