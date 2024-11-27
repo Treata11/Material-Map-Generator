@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import sys
 
+# upscale & crop
 import utils.imgops as ops
 import utils.architecture.architecture as arch
 
@@ -49,6 +50,7 @@ output_folder = os.path.normpath(args.output)
 NORMAL_MAP_MODEL = 'utils/models/1x_NormalMapGenerator-CX-Lite_200000_G.pth'
 OTHER_MAP_MODEL = 'utils/models/1x_FrankenMapGenerator-CX-Lite_215000_G.pth'
 
+## 
 def process(img, model):
     img = img * 1. / np.iinfo(img.dtype).max
     img = img[:, :, [2, 1, 0]]
@@ -78,7 +80,7 @@ def load_model(model_path):
 images=[]
 for root, _, files in os.walk(input_folder):
     for file in sorted(files, reverse=args.reverse):
-        if file.split('.')[-1].lower() in ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'tiff', 'tga']:
+        if file.split('.')[-1].lower() in ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'tiff', 'tga', 'heic', 'heif', 'dng']:
             images.append(os.path.join(root, file))
 models = [
     # NORMAL MAP
@@ -110,6 +112,7 @@ for idx, path in enumerate(images, 1):
     # Whether or not to perform the split/merge action
     do_split = img_height > args.tile_size or img_width > args.tile_size
 
+    ## Process the Image ##
     if do_split:
         rlts = ops.esrgan_launcher_split_merge(img, process, models, scale_factor=1, tile_size=args.tile_size)
     else:
@@ -139,3 +142,33 @@ for idx, path in enumerate(images, 1):
 
         displ_name = '{:s}.bump.png'.format(base) if args.ishiiruka else '{:s}_Displacement.png'.format(base)
         cv2.imwrite(os.path.join(output_folder, displ_name), displacement)
+
+
+import coremltools as ct
+
+def convert_to_coreml(torch_model, model_name):
+    # Convert the model
+    # https://apple.github.io/coremltools/source/coremltools.converters.convert.html
+    coreml_model = ct.convert(
+        torch_model, # Torch Exported Model
+        # skip_model_load=True,
+        # source='pytorch',  # Specify the source framework
+        minimum_deployment_target=ct.target.macOS15
+    ) 
+
+    # Save model in a Core ML `mlmodel` file
+    coreml_model.save(f"{model_name}.mlmodel")
+    print(f"Model saved as {model_name}.mlmodel")
+
+    # Load the saved model
+    loaded_model = ct.models.MLModel(f"{model_name}.mlmodel")
+
+def set_metadata(model):
+    # Set a short description for the Xcode UI
+    model.short_description = "Creates Normal, Roughness and Displacement maps of a given texture for Physically-Based-Rendering"
+
+## Convert each model to Core ML ##
+for idx, model in enumerate(models):
+    model_name = f"Model_{idx+1}"
+    convert_to_coreml(model, model_name)
+    set_metadata(model)
