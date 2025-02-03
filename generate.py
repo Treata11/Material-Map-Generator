@@ -67,7 +67,7 @@ def process(img, model):
 
 def load_model(model_path):
     global device
-    state_dict = torch.load(model_path)
+    state_dict = torch.load(model_path, weights_only=False)
     model = arch.RRDB_Net(3, 3, 32, 12, gc=32, upscale=1, norm_type=None, act_type='leakyrelu',
                             mode='CNA', res_scale=1, upsample_mode='upconv')
     model.load_state_dict(state_dict, strict=True)
@@ -82,12 +82,17 @@ for root, _, files in os.walk(input_folder):
     for file in sorted(files, reverse=args.reverse):
         if file.split('.')[-1].lower() in ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'tiff', 'tga', 'heic', 'heif', 'dng']:
             images.append(os.path.join(root, file))
+
 models = [
     # NORMAL MAP
     load_model(NORMAL_MAP_MODEL), 
     # ROUGHNESS/DISPLACEMENT MAPS
     load_model(OTHER_MAP_MODEL)
     ]
+# Initialize a list to store the images
+images_to_process = []
+
+
 for idx, path in enumerate(images, 1):
     base = os.path.splitext(os.path.relpath(path, input_folder))[0]
     output_dir = os.path.dirname(os.path.join(output_folder, base))
@@ -107,12 +112,13 @@ for idx, path in enumerate(images, 1):
     elif args.replicate:
         img = cv2.copyMakeBorder(img, 16, 16, 16, 16, cv2.BORDER_REPLICATE)
 
+    # Store the image in the list before processing
+    images_to_process.append(img)
+
     img_height, img_width = img.shape[:2]
 
     # Whether or not to perform the split/merge action
     do_split = img_height > args.tile_size or img_width > args.tile_size
-
-    exampleImage = img
 
     ## Process the Image ##
     if do_split:
@@ -148,34 +154,97 @@ for idx, path in enumerate(images, 1):
 
 import coremltools as ct
 
-def convert_to_coreml(torch_model, model_name):
-    example_input = torch.rand(1, 3, 64, 64)    # Example input, needed by jit tracer.
-    traced_model = torch.jit.trace(torch_model, example_input)
-    # Convert the model
-    # https://apple.github.io/coremltools/source/coremltools.converters.convert.html
-    coreml_model = ct.convert(
-        traced_model, # Torch Exported Model
-        inputs=[ct.ImageType(name="Image Texture", shape=example_input.shape)],
-        outputs=[ct.TensorType(name="Texture Map")],
-        # skip_model_load=True,
-        source='pytorch',  # Specify the source framework
-        convert_to='mlprogram',
-        minimum_deployment_target=ct.target.macOS15
-    ) 
+## TODO: Check if `Normalization and Scaling` operations took place before conversion to coreML
 
-    # Save model in a Core ML `mlmodel` file
-    coreml_model.save(f"{model_name}.mlpackage")
-    print(f"Model saved as {model_name}.mlpackage")
+def convert_normal_map_generator(torch_model, model_name): 
+    imgSize = 256 
+    imgShape = (1, 3, imgSize, imgSize) 
+    example_input = torch.rand(*imgShape)  # Example input needed for tracing
 
-    # Load the saved model
-    loaded_model = ct.models.MLModel(f"{model_name}.mlpackage")
+    traced_model = torch.jit.trace(torch_model, example_input) 
+    
+    coreml_model = ct.convert( 
+        traced_model, 
+        inputs=[ct.ImageType(name="Image_Texture", shape=imgShape, color_layout=ct.colorlayout.RGB)], 
+        outputs=[ct.ImageType(name="Normal_Map", color_layout=ct.colorlayout.RGB)], 
+        source='pytorch',  
+        convert_to='mlprogram', 
+        minimum_deployment_target=ct.target.macOS13 
+    )  
+    
+    coreml_model.save(f"{model_name}.mlpackage") 
+    print(f"Model saved as {model_name}.mlpackage") 
+    loaded_model = ct.models.MLModel(f"{model_name}.mlpackage") 
+    loaded_model.short_description = "Creates Normal map from a given texture for Physically-Based Rendering"
 
-def set_metadata(model):
-    # Set a short description for the Xcode UI
-    model.short_description = "Creates Normal, Roughness and Displacement maps of a given texture for Physically-Based-Rendering"
+def convert_roughness_displacement_generator(torch_model, model_name): 
+    imgSize = 256 
+    imgShape = (1, 3, imgSize, imgSize) 
+    example_input = torch.rand(*imgShape)  # Example input needed for tracing
+    # for img in images_to_process:
+    #     imgShape = img.shape[:2]
+    #     example_input = torch.tensor(img).permute(2, 0, 1).unsqueeze(0)  # Convert to correct shape
 
-## Convert each model to Core ML ##
-for idx, model in enumerate(models):
-    model_name = f"Model_{idx+1}"
-    convert_to_coreml(model, model_name)
-    set_metadata(model)
+    traced_model = torch.jit.trace(torch_model, example_input) 
+    
+    coreml_model = ct.convert( 
+        traced_model, 
+        inputs=[ct.ImageType(name="Image_Texture", shape=imgShape, color_layout=ct.colorlayout.RGB)], 
+        outputs=[
+            ct.ImageType(name="Roughness/Displacement_Map", color_layout=ct.colorlayout.RGB), # GRAYSCALE_FLOAT16
+        ], 
+        source='pytorch',  
+        convert_to='mlprogram', 
+        minimum_deployment_target=ct.target.macOS13 
+    )  
+    
+    coreml_model.save(f"{model_name}.mlpackage") 
+    print(f"Model saved as {model_name}.mlpackage") 
+    loaded_model = ct.models.MLModel(f"{model_name}.mlpackage") 
+    loaded_model.short_description = "Creates Roughness and Displacement maps from a given texture for Physically-Based Rendering"
+
+
+# Convert each model to MLPackage/CoreML
+for idx, model in enumerate(models): 
+    names = ['1x_NormalMapGenerator-CX-Lite_200000_G', '1x_FrankenMapGenerator-CX-Lite_215000_G'] 
+    if idx == 0:  # Assuming first model is Normal Map Generator
+        convert_normal_map_generator(model, names[idx])
+    elif idx == 1:  # Assuming second model is Roughness and Displacement Generator
+        convert_roughness_displacement_generator(model, names[idx])
+
+
+# Lack of Post-Process in CoreML Tools
+def post_process_outputs(rlts, ishiiruka_texture_encoder=False):
+    normal_map = rlts[0]  # Assuming normal_map is in a suitable format
+    roughness = rlts[1][:, :, 1]  # Assuming this is the roughness channel
+    displacement = rlts[1][:, :, 0]  # Assuming this is the displacement channel
+
+    if ishiiruka_texture_encoder:
+        r = 255 - roughness
+        g = normal_map[:, :, 1]
+        b = displacement
+        a = normal_map[:, :, 2]
+        output = cv2.merge((b, g, r, a))
+        return output
+    else:
+        return {
+            "normal_map": normal_map,
+            "roughness": roughness,
+            "displacement": displacement
+        }
+
+## Make a prediction using CoreML ##
+# for idx, path in enumerate(images, 1):
+#     base = os.path.splitext(os.path.relpath(path, input_folder))[0]
+#     output_dir = os.path.dirname(os.path.join(output_folder, base))
+#     os.makedirs(output_dir, exist_ok=True)
+#     print(idx, base)
+#     # read image
+#     try: 
+#         test_image = cv2.imread(path, cv2.cv2.IMREAD_COLOR)
+#     except:
+#         test_image = cv2.imread(path, cv2.IMREAD_COLOR)
+# out_dict = model.predict({input_name: test_image})
+# output = model.predict({"colorImage" : test_image})["colorOutput"]
+# display(output)
+# output.save("Prediction-Result.png")
