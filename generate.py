@@ -50,7 +50,7 @@ output_folder = os.path.normpath(args.output)
 NORMAL_MAP_MODEL = 'utils/models/1x_NormalMapGenerator-CX-Lite_200000_G.pth'
 OTHER_MAP_MODEL = 'utils/models/1x_FrankenMapGenerator-CX-Lite_215000_G.pth'
 
-## 
+## -
 def process(img, model):
     img = img * 1. / np.iinfo(img.dtype).max
     img = img[:, :, [2, 1, 0]]
@@ -112,7 +112,7 @@ for idx, path in enumerate(images, 1):
     elif args.replicate:
         img = cv2.copyMakeBorder(img, 16, 16, 16, 16, cv2.BORDER_REPLICATE)
 
-    # Store the image in the list before processing
+    ## Store the image in the list before processing
     images_to_process.append(img)
 
     img_height, img_width = img.shape[:2]
@@ -156,48 +156,53 @@ import coremltools as ct
 
 ## TODO: Check if `Normalization and Scaling` operations took place before conversion to coreML
 
-def convert_normal_map_generator(torch_model, model_name): 
-    imgSize = 256 
-    imgShape = (1, 3, imgSize, imgSize) 
-    example_input = torch.rand(*imgShape)  # Example input needed for tracing
+# TODO: Make flexible
+imgSize = 256 
+imgShape = (1, 3, imgSize, imgSize) 
+# imgShape = (imgSize, imgSize, 3) 
+example_input = torch.rand(*imgShape)  # Example input needed for tracing
 
+for img in images_to_process:
+    print(f"img Shape: {img.shape}") 
+
+def convert_normal_map_generator(torch_model, model_name): 
     traced_model = torch.jit.trace(torch_model, example_input) 
-    
+    # traced_model.save(NORMAL_MAP_MODEL) # Optional, can pass traced model directly to converter.
+
+    bias=[-0.485/0.226, -0.456/0.226, -0.406/0.226] # Doesn't have any effects...
+    image_input=ct.ImageType(
+        name="Image_Texture", shape=example_input.shape, color_layout=ct.colorlayout.RGB, scale=1, bias=bias
+    )
     coreml_model = ct.convert( 
         traced_model, 
-        inputs=[ct.ImageType(name="Image_Texture", shape=imgShape, color_layout=ct.colorlayout.RGB)], 
-        outputs=[ct.ImageType(name="Normal_Map", color_layout=ct.colorlayout.RGB)], 
+        inputs=[image_input], 
+        outputs=[ct.ImageType(name="Normal_Map", color_layout=ct.colorlayout.RGB, scale=1)], 
         source='pytorch',  
         convert_to='mlprogram', 
         minimum_deployment_target=ct.target.macOS13 
     )  
-    
     coreml_model.save(f"{model_name}.mlpackage") 
     print(f"Model saved as {model_name}.mlpackage") 
     loaded_model = ct.models.MLModel(f"{model_name}.mlpackage") 
     loaded_model.short_description = "Creates Normal map from a given texture for Physically-Based Rendering"
 
 def convert_roughness_displacement_generator(torch_model, model_name): 
-    imgSize = 256 
-    imgShape = (1, 3, imgSize, imgSize) 
-    example_input = torch.rand(*imgShape)  # Example input needed for tracing
     # for img in images_to_process:
     #     imgShape = img.shape[:2]
     #     example_input = torch.tensor(img).permute(2, 0, 1).unsqueeze(0)  # Convert to correct shape
-
     traced_model = torch.jit.trace(torch_model, example_input) 
-    
+    # traced_model.save(OTHER_MAP_MODEL) # Optional, can pass traced model directly to converter.
+
     coreml_model = ct.convert( 
         traced_model, 
         inputs=[ct.ImageType(name="Image_Texture", shape=imgShape, color_layout=ct.colorlayout.RGB)], 
         outputs=[
-            ct.ImageType(name="Roughness/Displacement_Map", color_layout=ct.colorlayout.RGB), # GRAYSCALE_FLOAT16
+            ct.ImageType(name="Other_Map", color_layout=ct.colorlayout.RGB), # GRAYSCALE_FLOAT16
         ], 
         source='pytorch',  
         convert_to='mlprogram', 
         minimum_deployment_target=ct.target.macOS13 
     )  
-    
     coreml_model.save(f"{model_name}.mlpackage") 
     print(f"Model saved as {model_name}.mlpackage") 
     loaded_model = ct.models.MLModel(f"{model_name}.mlpackage") 
@@ -207,17 +212,17 @@ def convert_roughness_displacement_generator(torch_model, model_name):
 # Convert each model to MLPackage/CoreML
 for idx, model in enumerate(models): 
     names = ['1x_NormalMapGenerator-CX-Lite_200000_G', '1x_FrankenMapGenerator-CX-Lite_215000_G'] 
-    if idx == 0:  # Assuming first model is Normal Map Generator
+    if idx == 0:
         convert_normal_map_generator(model, names[idx])
-    elif idx == 1:  # Assuming second model is Roughness and Displacement Generator
+    elif idx == 1:
         convert_roughness_displacement_generator(model, names[idx])
 
 
 # Lack of Post-Process in CoreML Tools
 def post_process_outputs(rlts, ishiiruka_texture_encoder=False):
-    normal_map = rlts[0]  # Assuming normal_map is in a suitable format
-    roughness = rlts[1][:, :, 1]  # Assuming this is the roughness channel
-    displacement = rlts[1][:, :, 0]  # Assuming this is the displacement channel
+    normal_map = rlts[0]
+    roughness = rlts[1][:, :, 1]
+    displacement = rlts[1][:, :, 0]
 
     if ishiiruka_texture_encoder:
         r = 255 - roughness
