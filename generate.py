@@ -121,35 +121,35 @@ for idx, path in enumerate(images, 1):
     do_split = img_height > args.tile_size or img_width > args.tile_size
 
     ## Process the Image ##
-    if do_split:
-        rlts = ops.esrgan_launcher_split_merge(img, process, models, scale_factor=1, tile_size=args.tile_size)
-    else:
-        rlts = [process(img, model) for model in models]
+    # if do_split:
+    #     rlts = ops.esrgan_launcher_split_merge(img, process, models, scale_factor=1, tile_size=args.tile_size)
+    # else:
+    #     rlts = [process(img, model) for model in models]
 
-    if args.seamless or args.mirror or args.replicate:
-        rlts = [ops.crop_seamless(rlt) for rlt in rlts]
+    # if args.seamless or args.mirror or args.replicate:
+    #     rlts = [ops.crop_seamless(rlt) for rlt in rlts]
 
-    normal_map = rlts[0]
-    roughness = rlts[1][:, :, 1]
-    displacement = rlts[1][:, :, 0]
+    # normal_map = rlts[0]
+    # roughness = rlts[1][:, :, 1]
+    # displacement = rlts[1][:, :, 0]
 
-    if args.ishiiruka_texture_encoder:
-        r = 255 - roughness
-        g = normal_map[:, :, 1]
-        b = displacement
-        a = normal_map[:, :, 2]
-        output = cv2.merge((b, g, r, a))
-        cv2.imwrite(os.path.join(output_folder, '{:s}.mat.png'.format(base)), output)
-    else:
-        normal_name = '{:s}.nrm.png'.format(base) if args.ishiiruka else '{:s}_Normal.png'.format(base)
-        cv2.imwrite(os.path.join(output_folder, normal_name), normal_map)
+    # if args.ishiiruka_texture_encoder:
+    #     r = 255 - roughness
+    #     g = normal_map[:, :, 1]
+    #     b = displacement
+    #     a = normal_map[:, :, 2]
+    #     output = cv2.merge((b, g, r, a))
+    #     cv2.imwrite(os.path.join(output_folder, '{:s}.mat.png'.format(base)), output)
+    # else:
+    #     normal_name = '{:s}.nrm.png'.format(base) if args.ishiiruka else '{:s}_Normal.png'.format(base)
+    #     cv2.imwrite(os.path.join(output_folder, normal_name), normal_map)
 
-        rough_name = '{:s}.spec.png'.format(base) if args.ishiiruka else '{:s}_Roughness.png'.format(base)
-        rough_img = 255 - roughness if args.ishiiruka else roughness
-        cv2.imwrite(os.path.join(output_folder, rough_name), rough_img)
+    #     rough_name = '{:s}.spec.png'.format(base) if args.ishiiruka else '{:s}_Roughness.png'.format(base)
+    #     rough_img = 255 - roughness if args.ishiiruka else roughness
+    #     cv2.imwrite(os.path.join(output_folder, rough_name), rough_img)
 
-        displ_name = '{:s}.bump.png'.format(base) if args.ishiiruka else '{:s}_Displacement.png'.format(base)
-        cv2.imwrite(os.path.join(output_folder, displ_name), displacement)
+    #     displ_name = '{:s}.bump.png'.format(base) if args.ishiiruka else '{:s}_Displacement.png'.format(base)
+    #     cv2.imwrite(os.path.join(output_folder, displ_name), displacement)
 
 
 import coremltools as ct
@@ -169,14 +169,16 @@ def convert_normal_map_generator(torch_model, model_name):
     traced_model = torch.jit.trace(torch_model, example_input) 
     # traced_model.save(NORMAL_MAP_MODEL) # Optional, can pass traced model directly to converter.
 
+    scale = 1/(0.226*255.0)
     bias=[-0.485/0.226, -0.456/0.226, -0.406/0.226] # Doesn't have any effects...
     image_input=ct.ImageType(
-        name="Image_Texture", shape=example_input.shape, color_layout=ct.colorlayout.RGB, scale=1, bias=bias
+        name="Image_Texture", shape=example_input.shape, 
+        color_layout=ct.colorlayout.RGB, scale=scale, bias=bias
     )
     coreml_model = ct.convert( 
         traced_model, 
         inputs=[image_input], 
-        outputs=[ct.ImageType(name="Normal_Map", color_layout=ct.colorlayout.RGB, scale=1)], 
+        outputs=[ct.ImageType(name="Normal_Map", color_layout=ct.colorlayout.RGB)], 
         source='pytorch',  
         convert_to='mlprogram', 
         minimum_deployment_target=ct.target.macOS13 
