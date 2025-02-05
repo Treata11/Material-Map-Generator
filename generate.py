@@ -50,14 +50,36 @@ output_folder = os.path.normpath(args.output)
 NORMAL_MAP_MODEL = 'utils/models/1x_NormalMapGenerator-CX-Lite_200000_G.pth'
 OTHER_MAP_MODEL = 'utils/models/1x_FrankenMapGenerator-CX-Lite_215000_G.pth'
 
+# Initialize a list to store the images
+images_to_process = []
+
 ## -
 def process(img, model):
+    # print(f"def process before; img Shape: {img.shape}") 
+    # print("def process before; img Data Type:", img.dtype)
+    # print("def process before; Sample img Pixel Values:", img[0, 0]) # Top left RGBs 
+    # print(f"def process before; img dtype: {np.info(img.dtype)}") 
+    # print(f"def process before; img : {img[:, :, [2, 1, 0]]}") 
+
+    # Preprocess
     img = img * 1. / np.iinfo(img.dtype).max
     img = img[:, :, [2, 1, 0]]
     img = torch.from_numpy(np.transpose(img, (2, 0, 1))).float()
     img_LR = img.unsqueeze(0)
     img_LR = img_LR.to(device)
 
+    # print(f"def process after; img Shape: {img.shape}") 
+    # print("def process after; img Data Type:", img.dtype)
+    # print("def process after; Sample img Pixel Values:", img[0, 0]) # Top left RGBs 
+
+    ## Store the image in the list before processing
+    images_to_process.append(img)
+    
+    # Write the tensor image on disk
+    img_name = '{:s}_Def_Proecess_Img.png'.format(base)
+    # cv2.imwrite(os.path.join(output_folder, img_name), img.numpy())
+
+    # Post Processes
     output = model(img_LR).data.squeeze(
         0).float().cpu().clamp_(0, 1).numpy()
     output = output[[2, 1, 0], :, :]
@@ -89,9 +111,6 @@ models = [
     # ROUGHNESS/DISPLACEMENT MAPS
     load_model(OTHER_MAP_MODEL)
     ]
-# Initialize a list to store the images
-images_to_process = []
-
 
 for idx, path in enumerate(images, 1):
     base = os.path.splitext(os.path.relpath(path, input_folder))[0]
@@ -112,44 +131,41 @@ for idx, path in enumerate(images, 1):
     elif args.replicate:
         img = cv2.copyMakeBorder(img, 16, 16, 16, 16, cv2.BORDER_REPLICATE)
 
-    ## Store the image in the list before processing
-    images_to_process.append(img)
-
     img_height, img_width = img.shape[:2]
 
     # Whether or not to perform the split/merge action
     do_split = img_height > args.tile_size or img_width > args.tile_size
 
-    ## Process the Image ##
-    # if do_split:
-    #     rlts = ops.esrgan_launcher_split_merge(img, process, models, scale_factor=1, tile_size=args.tile_size)
-    # else:
-    #     rlts = [process(img, model) for model in models]
+    # Process the Image ##
+    if do_split:
+        rlts = ops.esrgan_launcher_split_merge(img, process, models, scale_factor=1, tile_size=args.tile_size)
+    else:
+        rlts = [process(img, model) for model in models]
 
-    # if args.seamless or args.mirror or args.replicate:
-    #     rlts = [ops.crop_seamless(rlt) for rlt in rlts]
+    if args.seamless or args.mirror or args.replicate:
+        rlts = [ops.crop_seamless(rlt) for rlt in rlts]
 
-    # normal_map = rlts[0]
-    # roughness = rlts[1][:, :, 1]
-    # displacement = rlts[1][:, :, 0]
+    normal_map = rlts[0]
+    roughness = rlts[1][:, :, 1]
+    displacement = rlts[1][:, :, 0]
 
-    # if args.ishiiruka_texture_encoder:
-    #     r = 255 - roughness
-    #     g = normal_map[:, :, 1]
-    #     b = displacement
-    #     a = normal_map[:, :, 2]
-    #     output = cv2.merge((b, g, r, a))
-    #     cv2.imwrite(os.path.join(output_folder, '{:s}.mat.png'.format(base)), output)
-    # else:
-    #     normal_name = '{:s}.nrm.png'.format(base) if args.ishiiruka else '{:s}_Normal.png'.format(base)
-    #     cv2.imwrite(os.path.join(output_folder, normal_name), normal_map)
+    if args.ishiiruka_texture_encoder:
+        r = 255 - roughness
+        g = normal_map[:, :, 1]
+        b = displacement
+        a = normal_map[:, :, 2]
+        output = cv2.merge((b, g, r, a))
+        cv2.imwrite(os.path.join(output_folder, '{:s}.mat.png'.format(base)), output)
+    else:
+        normal_name = '{:s}.nrm.png'.format(base) if args.ishiiruka else '{:s}_Normal.png'.format(base)
+        cv2.imwrite(os.path.join(output_folder, normal_name), normal_map)
 
-    #     rough_name = '{:s}.spec.png'.format(base) if args.ishiiruka else '{:s}_Roughness.png'.format(base)
-    #     rough_img = 255 - roughness if args.ishiiruka else roughness
-    #     cv2.imwrite(os.path.join(output_folder, rough_name), rough_img)
+        rough_name = '{:s}.spec.png'.format(base) if args.ishiiruka else '{:s}_Roughness.png'.format(base)
+        rough_img = 255 - roughness if args.ishiiruka else roughness
+        cv2.imwrite(os.path.join(output_folder, rough_name), rough_img)
 
-    #     displ_name = '{:s}.bump.png'.format(base) if args.ishiiruka else '{:s}_Displacement.png'.format(base)
-    #     cv2.imwrite(os.path.join(output_folder, displ_name), displacement)
+        displ_name = '{:s}.bump.png'.format(base) if args.ishiiruka else '{:s}_Displacement.png'.format(base)
+        cv2.imwrite(os.path.join(output_folder, displ_name), displacement)
 
 
 import coremltools as ct
@@ -162,18 +178,30 @@ imgShape = (1, 3, imgSize, imgSize)
 # imgShape = (imgSize, imgSize, 3) 
 example_input = torch.rand(*imgShape)  # Example input needed for tracing
 
+# https://apple.github.io/coremltools/docs-guides/source/image-inputs.html#preprocessing-for-torch
+scale = 1/(0.226*255.0)
+bias = [- 0.485/(0.229) , - 0.456/(0.224), - 0.406/(0.225)]
+
+# scale = 200/(0.226*255.0)
+# bias = [1, 1, 1]  # No bias for each channel
+# bias = [0.485/(0.229) , 0.456/(0.224), 0.406/(0.225)]
+
 for img in images_to_process:
     print(f"img Shape: {img.shape}") 
+    print("img Data Type:", img.dtype)
+    print("Sample img Pixel Values:", img[0, 0]) # Top left RGBs 
+
+print(f"example_input Shape: {example_input.shape}") 
+print("example_input Data Type:", example_input.dtype)
+print("Sample example_input Pixel Values:", example_input[0, 0]) # Top left RGBs
 
 def convert_normal_map_generator(torch_model, model_name): 
     traced_model = torch.jit.trace(torch_model, example_input) 
     # traced_model.save(NORMAL_MAP_MODEL) # Optional, can pass traced model directly to converter.
-
-    scale = 1/(0.226*255.0)
-    bias=[-0.485/0.226, -0.456/0.226, -0.406/0.226] # Doesn't have any effects...
+      
     image_input=ct.ImageType(
         name="Image_Texture", shape=example_input.shape, 
-        color_layout=ct.colorlayout.RGB, scale=scale, bias=bias
+        color_layout=ct.colorlayout.BGR, scale=scale, bias=bias
     )
     coreml_model = ct.convert( 
         traced_model, 
@@ -195,9 +223,13 @@ def convert_roughness_displacement_generator(torch_model, model_name):
     traced_model = torch.jit.trace(torch_model, example_input) 
     # traced_model.save(OTHER_MAP_MODEL) # Optional, can pass traced model directly to converter.
 
+    image_input=ct.ImageType(
+        name="Image_Texture", shape=example_input.shape, 
+        color_layout=ct.colorlayout.BGR, scale=scale, bias=bias
+    )
     coreml_model = ct.convert( 
         traced_model, 
-        inputs=[ct.ImageType(name="Image_Texture", shape=imgShape, color_layout=ct.colorlayout.RGB)], 
+        inputs=[image_input], 
         outputs=[
             ct.ImageType(name="Other_Map", color_layout=ct.colorlayout.RGB), # GRAYSCALE_FLOAT16
         ], 
