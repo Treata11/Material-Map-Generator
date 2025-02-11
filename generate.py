@@ -57,12 +57,6 @@ images_to_process = []
 def process(img, model):
     pixel_coords = [(0, 0), (1, 1), (63, 63), (64, 64), (127, 127), (128, 128), (255, 255)]
 
-    # print(f"def process before; img Shape: {img.shape}") 
-    # print("def process before; img Data Type:", img.dtype)
-    # print("def process before; Sample img Pixel Values:", img[0, 0]) # Top left RGBs 
-    # print(f"def process before; img dtype: {np.info(img.dtype)}") 
-    # print(f"def process before; img : {img[:, :, [2, 1, 0]]}") 
-
     # Preprocess
     img = img * 1. / np.iinfo(img.dtype).max
     img = img[:, :, [2, 1, 0]]
@@ -70,27 +64,13 @@ def process(img, model):
     img_LR = img.unsqueeze(0)
     img_LR = img_LR.to(device)
 
-    print("Input Images RGB values:")
-    # TODO: Print the pixel_coords RGB values
-
-    # print(f"def process after; img Shape: {img.shape}") 
-    # print("def process after; img Data Type:", img.dtype)
-    # print("def process after; Sample img Pixel Values:", img[0, 0]) # Top left RGBs 
-
-    ## Store the image in the list before processing
-    images_to_process.append(img)
-    
-    # Write the tensor image on disk
-    # img_name = '{:s}_Def_Proecess_Img.png'.format(base)
-    # cv2.imwrite(os.path.join(output_folder, img_name), img.numpy())
-
     # Post Processes
     output = model(img_LR).data.squeeze(
         0).float().cpu().clamp_(0, 1).numpy()
     output = output[[2, 1, 0], :, :] # RGB to BGR
     output = np.transpose(output, (1, 2, 0)) # Reshape from (C, H, W) to (H, W, C)
 
-    print("Output Images RGB values (before *255):")
+    print("Output Images RGB values")
     for coords in pixel_coords:
         x, y = coords
         rgb_values = output[y, x]  # Note: output[y, x] gives you [R, G, B]
@@ -98,14 +78,6 @@ def process(img, model):
         print(f"Pixel{coords}: R={rgb_values[0]:.6f}, G={rgb_values[1]:.6f}, B={rgb_values[2]:.6f}")
 
     output = (output * 255.).round()
-
-    print("Output Images RGB values (after *255):")
-    for coords in pixel_coords:
-        x, y = coords
-        rgb_values = output[y, x]  # Note: output[y, x] gives you [R, G, B]
-        # Print RGB values with high precision
-        print(f"Pixel{coords}: R={rgb_values[0]:.6f}, G={rgb_values[1]:.6f}, B={rgb_values[2]:.6f}")
-    return output
 
 def load_model(model_path):
     global device
@@ -203,43 +175,28 @@ example_input = torch.rand(*imgShape)  # Example input needed for tracing
 β = 0.1348233757
 γ = 0.0566280158
 # https://apple.github.io/coremltools/docs-guides/source/image-inputs.html#preprocessing-for-torch
-# scale = 1/(0.226*255.0)
-# bias = [- (0.485 + α)/(0.229) , - (0.456 + β)/(0.224), - (0.406 + γ)/(0.225)]
-
-scale = 1/(255.0)
-bias = [0, 0, 0]  # No bias for each channel
-# bias = [0.485/(0.229) , 0.456/(0.224), 0.406/(0.225)]
-newBias = [0, 0.5, 0]
-
-# for img in images_to_process:
-#     print(f"\n\nimg Shape: {img.shape}") 
-#     print("img Data Type:", img.dtype)
-#     print("Sample img Pixel Values:", img[0, 0]) # Top left RGBs 
-
-# print(f"example_input Shape: {example_input.shape}") 
-# print("example_input Data Type:", example_input.dtype)
-# print("Sample example_input Pixel Values:", example_input[0, 0]) # Top left RGBs
+scale = 1/(0.226*255.0)
+bias = [- (0.485 + α)/(0.229) , - (0.456 + β)/(0.224), - (0.406 + γ)/(0.225)]
 
 
 # --------------------------------------------------
-from coremltools.converters.mil import Builder as mb
-from coremltools.converters.mil import register_torch_op
+# from coremltools.converters.mil import Builder as mb
+# from coremltools.converters.mil import register_torch_op
 
-# Post Processing with Custom Layers
-@register_torch_op
-def upsample_bicubic2d(context, node):
-    a = context[node.inputs[0]]
-    align_corners = context[node.inputs[2]].val
-    scale = context[node.inputs[3]]
-    scale_h = scale.val[0]
-    scale_w = scale.val[1]
+# # Post Processing with Custom Layers
+# @register_torch_op
+# def upsample_bicubic2d(context, node):
+#     a = context[node.inputs[0]]
+#     align_corners = context[node.inputs[2]].val
+#     scale = context[node.inputs[3]]
+#     scale_h = scale.val[0]
+#     scale_w = scale.val[1]
 
-    x = mb.upsample_bilinear(x=a, scale_factor_height=scale_h, scale_factor_width=scale_w, align_corners=align_corners, name=node.name)
-    context.add(x)
+#     x = mb.upsample_bilinear(x=a, scale_factor_height=scale_h, scale_factor_width=scale_w, align_corners=align_corners, name=node.name)
+#     context.add(x)
 
 
-
-from coremltools.proto import NeuralNetwork_pb2
+# from coremltools.proto import NeuralNetwork_pb2
 
 # def convert_lambda(layer):
 #     # Only convert this Lambda layer if it is for our swish function.
@@ -274,8 +231,8 @@ def convert_normal_map_generator(torch_model, model_name):
         traced_model, 
         inputs=[image_input], 
         outputs=[ct.ImageType(name="normalMap", color_layout=ct.colorlayout.BGR)], 
-        # add_custom_layers=True,
-        # custom_conversion_functions={ "Lambda": convert_lambda },
+        # add_custom_layers=True, # deprecated
+        # custom_conversion_functions={ "Lambda": convert_lambda }, # deprecated
         source='pytorch',  
         convert_to='mlprogram', 
         compute_precision=ct.precision.FLOAT32,
@@ -287,6 +244,8 @@ def convert_normal_map_generator(torch_model, model_name):
     loaded_model = ct.models.MLModel(f"{model_name}.mlpackage") 
     loaded_model.short_description = "Creates Normal map from a given texture for Physically-Based Rendering"
 
+
+# - TODO: Complete
 def convert_roughness_displacement_generator(torch_model, model_name): 
     # for img in images_to_process:
     #     imgShape = img.shape[:2]
