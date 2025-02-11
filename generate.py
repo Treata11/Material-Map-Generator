@@ -55,6 +55,8 @@ images_to_process = []
 
 ## -
 def process(img, model):
+    pixel_coords = [(0, 0), (1, 1), (63, 63), (64, 64), (127, 127), (128, 128), (255, 255)]
+
     # print(f"def process before; img Shape: {img.shape}") 
     # print("def process before; img Data Type:", img.dtype)
     # print("def process before; Sample img Pixel Values:", img[0, 0]) # Top left RGBs 
@@ -68,6 +70,9 @@ def process(img, model):
     img_LR = img.unsqueeze(0)
     img_LR = img_LR.to(device)
 
+    print("Input Images RGB values:")
+    # TODO: Print the pixel_coords RGB values
+
     # print(f"def process after; img Shape: {img.shape}") 
     # print("def process after; img Data Type:", img.dtype)
     # print("def process after; Sample img Pixel Values:", img[0, 0]) # Top left RGBs 
@@ -76,15 +81,30 @@ def process(img, model):
     images_to_process.append(img)
     
     # Write the tensor image on disk
-    img_name = '{:s}_Def_Proecess_Img.png'.format(base)
+    # img_name = '{:s}_Def_Proecess_Img.png'.format(base)
     # cv2.imwrite(os.path.join(output_folder, img_name), img.numpy())
 
     # Post Processes
     output = model(img_LR).data.squeeze(
         0).float().cpu().clamp_(0, 1).numpy()
-    output = output[[2, 1, 0], :, :]
-    output = np.transpose(output, (1, 2, 0))
+    output = output[[2, 1, 0], :, :] # RGB to BGR
+    output = np.transpose(output, (1, 2, 0)) # Reshape from (C, H, W) to (H, W, C)
+
+    print("Output Images RGB values (before *255):")
+    for coords in pixel_coords:
+        x, y = coords
+        rgb_values = output[y, x]  # Note: output[y, x] gives you [R, G, B]
+        # Print RGB values with high precision
+        print(f"Pixel{coords}: R={rgb_values[0]:.6f}, G={rgb_values[1]:.6f}, B={rgb_values[2]:.6f}")
+
     output = (output * 255.).round()
+
+    print("Output Images RGB values (after *255):")
+    for coords in pixel_coords:
+        x, y = coords
+        rgb_values = output[y, x]  # Note: output[y, x] gives you [R, G, B]
+        # Print RGB values with high precision
+        print(f"Pixel{coords}: R={rgb_values[0]:.6f}, G={rgb_values[1]:.6f}, B={rgb_values[2]:.6f}")
     return output
 
 def load_model(model_path):
@@ -169,6 +189,7 @@ for idx, path in enumerate(images, 1):
 
 
 import coremltools as ct
+# from coremltools.proto import NeuralNetwork_pb2
 
 ## TODO: Check if `Normalization and Scaling` operations took place before conversion to coreML
 
@@ -178,38 +199,88 @@ imgShape = (1, 3, imgSize, imgSize)
 # imgShape = (imgSize, imgSize, 3) 
 example_input = torch.rand(*imgShape)  # Example input needed for tracing
 
+α = 0.0889850649
+β = 0.1348233757
+γ = 0.0566280158
 # https://apple.github.io/coremltools/docs-guides/source/image-inputs.html#preprocessing-for-torch
-scale = 1/(0.226*255.0)
-bias = [- 0.485/(0.229) , - 0.456/(0.224), - 0.406/(0.225)]
+# scale = 1/(0.226*255.0)
+# bias = [- (0.485 + α)/(0.229) , - (0.456 + β)/(0.224), - (0.406 + γ)/(0.225)]
 
-# scale = 200/(0.226*255.0)
-# bias = [1, 1, 1]  # No bias for each channel
+scale = 1/(255.0)
+bias = [0, 0, 0]  # No bias for each channel
 # bias = [0.485/(0.229) , 0.456/(0.224), 0.406/(0.225)]
+newBias = [0, 0.5, 0]
 
-for img in images_to_process:
-    print(f"img Shape: {img.shape}") 
-    print("img Data Type:", img.dtype)
-    print("Sample img Pixel Values:", img[0, 0]) # Top left RGBs 
+# for img in images_to_process:
+#     print(f"\n\nimg Shape: {img.shape}") 
+#     print("img Data Type:", img.dtype)
+#     print("Sample img Pixel Values:", img[0, 0]) # Top left RGBs 
 
-print(f"example_input Shape: {example_input.shape}") 
-print("example_input Data Type:", example_input.dtype)
-print("Sample example_input Pixel Values:", example_input[0, 0]) # Top left RGBs
+# print(f"example_input Shape: {example_input.shape}") 
+# print("example_input Data Type:", example_input.dtype)
+# print("Sample example_input Pixel Values:", example_input[0, 0]) # Top left RGBs
+
+
+# --------------------------------------------------
+from coremltools.converters.mil import Builder as mb
+from coremltools.converters.mil import register_torch_op
+
+# Post Processing with Custom Layers
+@register_torch_op
+def upsample_bicubic2d(context, node):
+    a = context[node.inputs[0]]
+    align_corners = context[node.inputs[2]].val
+    scale = context[node.inputs[3]]
+    scale_h = scale.val[0]
+    scale_w = scale.val[1]
+
+    x = mb.upsample_bilinear(x=a, scale_factor_height=scale_h, scale_factor_width=scale_w, align_corners=align_corners, name=node.name)
+    context.add(x)
+
+
+
+from coremltools.proto import NeuralNetwork_pb2
+
+# def convert_lambda(layer):
+#     # Only convert this Lambda layer if it is for our swish function.
+#     if layer.function == swish:
+#         params = NeuralNetwork_pb2.CustomLayerParams()
+
+#         # The name of the Swift or Obj-C class that implements this layer.
+#         params.className = "Swish"
+
+#         # The desciption is shown in Xcode's mlmodel viewer.
+#         params.description = "A fancy new activation function"
+
+#         return params
+#     else:
+#         return None
+
+
+# ---------------------------------
+
+
 
 def convert_normal_map_generator(torch_model, model_name): 
-    traced_model = torch.jit.trace(torch_model, example_input) 
+    traced_model = torch.jit.trace(torch_model, example_input, strict=True) 
     # traced_model.save(NORMAL_MAP_MODEL) # Optional, can pass traced model directly to converter.
       
     image_input=ct.ImageType(
-        name="Image_Texture", shape=example_input.shape, 
-        color_layout=ct.colorlayout.BGR, scale=scale, bias=bias
+        name="imageTexture", shape=example_input.shape, 
+        color_layout=ct.colorlayout.BGR, # no effects upon changing to BGR
+        bias=[-0.485/0.229,-0.456/0.224,-0.406/0.225], scale=1.0/255.0/0.226
     )
     coreml_model = ct.convert( 
         traced_model, 
         inputs=[image_input], 
-        outputs=[ct.ImageType(name="Normal_Map", color_layout=ct.colorlayout.RGB)], 
+        outputs=[ct.ImageType(name="normalMap", color_layout=ct.colorlayout.BGR)], 
+        # add_custom_layers=True,
+        # custom_conversion_functions={ "Lambda": convert_lambda },
         source='pytorch',  
         convert_to='mlprogram', 
-        minimum_deployment_target=ct.target.macOS13 
+        compute_precision=ct.precision.FLOAT32,
+        debug=True,
+        minimum_deployment_target=ct.target.macOS14 
     )  
     coreml_model.save(f"{model_name}.mlpackage") 
     print(f"Model saved as {model_name}.mlpackage") 
@@ -220,18 +291,18 @@ def convert_roughness_displacement_generator(torch_model, model_name):
     # for img in images_to_process:
     #     imgShape = img.shape[:2]
     #     example_input = torch.tensor(img).permute(2, 0, 1).unsqueeze(0)  # Convert to correct shape
-    traced_model = torch.jit.trace(torch_model, example_input) 
+    traced_model = torch.jit.trace(torch_model, example_input, strict=False) 
     # traced_model.save(OTHER_MAP_MODEL) # Optional, can pass traced model directly to converter.
 
     image_input=ct.ImageType(
-        name="Image_Texture", shape=example_input.shape, 
+        name="imageTexture", shape=example_input.shape, 
         color_layout=ct.colorlayout.BGR, scale=scale, bias=bias
     )
     coreml_model = ct.convert( 
         traced_model, 
         inputs=[image_input], 
         outputs=[
-            ct.ImageType(name="Other_Map", color_layout=ct.colorlayout.RGB), # GRAYSCALE_FLOAT16
+            ct.ImageType(name="frankenMap", color_layout=ct.colorlayout.RGB), # GRAYSCALE_FLOAT16
         ], 
         source='pytorch',  
         convert_to='mlprogram', 
@@ -245,10 +316,12 @@ def convert_roughness_displacement_generator(torch_model, model_name):
 
 # Convert each model to MLPackage/CoreML
 for idx, model in enumerate(models): 
-    names = ['1x_NormalMapGenerator-CX-Lite_200000_G', '1x_FrankenMapGenerator-CX-Lite_215000_G'] 
+    names = ['NormalMapGenerator-CX-Lite_200000_G', 'FrankenMapGenerator-CX-Lite_215000_G'] 
     if idx == 0:
+        # break
         convert_normal_map_generator(model, names[idx])
     elif idx == 1:
+        break
         convert_roughness_displacement_generator(model, names[idx])
 
 
