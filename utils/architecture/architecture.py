@@ -1,5 +1,6 @@
 import math
 import torch.nn as nn
+
 import utils.architecture.block as B
 
 ####################
@@ -7,6 +8,7 @@ import utils.architecture.block as B
 ####################
 
 class RRDB_Net(nn.Module):
+    # TODO: PT - https://apple.github.io/coremltools/source/coremltools.converters.mil.mil.ops.defs.html#coremltools.converters.mil.mil.ops.defs.iOS15.activation.leaky_relu
     def __init__(self, in_nc, out_nc, nf, nb, gc=32, upscale=4, norm_type=None, act_type='leakyrelu', \
             mode='CNA', res_scale=1, upsample_mode='upconv'):
         super(RRDB_Net, self).__init__()
@@ -14,6 +16,7 @@ class RRDB_Net(nn.Module):
         if upscale == 3:
             n_upscale = 1
 
+        # Scripting on behalf of the for-loop PT - https://apple.github.io/coremltools/docs-guides/source/model-scripting.html
         fea_conv = B.conv_block(in_nc, nf, kernel_size=3, norm_type=None, act_type=None)
         rb_blocks = [B.RRDB(nf, kernel_size=3, gc=32, stride=1, bias=True, pad_type='zero', \
             norm_type=norm_type, act_type=act_type, mode='CNA') for _ in range(nb)]

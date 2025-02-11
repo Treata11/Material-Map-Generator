@@ -2,6 +2,8 @@ from collections import OrderedDict
 import torch
 import torch.nn as nn
 
+import coremltools as ct
+
 ####################
 # Basic blocks
 ####################
@@ -32,6 +34,7 @@ def norm(norm_type, nc):
         layer = nn.InstanceNorm2d(nc, affine=False)
     else:
         raise NotImplementedError('normalization layer [{:s}] is not found'.format(norm_type))
+    print(f"norm def output: {layer} and norm type: {norm_type}") 
     return layer
 
 
