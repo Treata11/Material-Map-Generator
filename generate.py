@@ -107,6 +107,7 @@ models = [
     ]
 
 for idx, path in enumerate(images, 1):
+    break
     base = os.path.splitext(os.path.relpath(path, input_folder))[0]
     output_dir = os.path.dirname(os.path.join(output_folder, base))
     os.makedirs(output_dir, exist_ok=True)
@@ -279,10 +280,10 @@ def convert_roughness_displacement_generator(torch_model, model_name):
 for idx, model in enumerate(models): 
     names = ['NormalMapGenerator-CX-Lite_200000_G', 'FrankenMapGenerator-CX-Lite_215000_G'] 
     if idx == 0:
-        # break
+        break
         convert_normal_map_generator(model, names[idx])
     elif idx == 1:
-        # break
+        break
         convert_roughness_displacement_generator(model, names[idx])
 
 
@@ -305,18 +306,49 @@ for idx, model in enumerate(models):
 #             "displacement": displacement
 #         }
 
-## Make a prediction using CoreML ##
-# for idx, path in enumerate(images, 1):
-#     base = os.path.splitext(os.path.relpath(path, input_folder))[0]
-#     output_dir = os.path.dirname(os.path.join(output_folder, base))
-#     os.makedirs(output_dir, exist_ok=True)
-#     print(idx, base)
-#     # read image
-#     try: 
-#         test_image = cv2.imread(path, cv2.cv2.IMREAD_COLOR)
-#     except:
-#         test_image = cv2.imread(path, cv2.IMREAD_COLOR)
-# out_dict = model.predict({input_name: test_image})
-# output = model.predict({"colorImage" : test_image})["colorOutput"]
-# display(output)
-# output.save("Prediction-Result.png")
+
+# MARK: --- --- --- --- --- Predict --- --- --- --- ---
+
+# def preprocess_for_coreml(img):
+#     img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR) 
+#     # img = cv2.resize(img, (256, 256))  
+#     img = img / 255.0  # Normalize
+#     return img
+
+# Load CoreML model
+model_name = 'NormalMapGenerator-CX-Lite_200000_G'
+coreml_model = ct.models.MLModel(f"{model_name}.mlpackage")
+
+from PIL import Image  # Import PIL for image 
+
+for idx, path in enumerate(images, 1):
+    base = os.path.splitext(os.path.relpath(path, input_folder))[0]
+    output_dir = os.path.dirname(os.path.join(output_folder, base))
+    os.makedirs(output_dir, exist_ok=True)
+    print(idx, base)
+
+    # Read image
+    img = cv2.imread(path)
+    if img is None:
+        raise ValueError("Image not loaded. Check the path.")
+
+    # # Preprocess image for CoreML model
+    # coreml_input = preprocess_for_coreml(img)
+
+    # Get output from CoreML model  (Done in scale and bias)
+    pil_image = Image.fromarray(img)  # Convert NumPy array to PIL Image
+    coreml_output = coreml_model.predict({'imageTexture': pil_image})
+
+    coreml_output_image = coreml_output['normalMap']
+
+    print(f"CoreML Output: {coreml_output_image}")
+
+    ## Post Processing
+    output_array = np.array(coreml_output_image)  # Convert PIL Image to NumPy array
+    # output_array = np.clip(output_array, 0, 1)  # Ensure values are between 0 and 1
+    output_array = (output_array * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
+
+    output_file_path = os.path.join(output_folder, f'{base}_coreML_normal_map.png')
+    cv2.imwrite(output_file_path, cv2.cvtColor(output_array, cv2.COLOR_RGBA2BGR))  # If output is RGBA
+
+    print(f"Saved output image: {output_file_path}")
