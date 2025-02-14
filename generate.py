@@ -70,14 +70,16 @@ def process(img, model):
     output = output[[2, 1, 0], :, :] # RGB to BGR
     output = np.transpose(output, (1, 2, 0)) # Reshape from (C, H, W) to (H, W, C)
 
-    print("Output Images RGB values")
-    for coords in pixel_coords:
-        x, y = coords
-        rgb_values = output[y, x]  # Note: output[y, x] gives you [R, G, B]
-        # Print RGB values with high precision
-        print(f"Pixel{coords}: R={rgb_values[0]:.6f}, G={rgb_values[1]:.6f}, B={rgb_values[2]:.6f}")
+    # print("Output Images RGB values")
+    # for coords in pixel_coords:
+    #     x, y = coords
+    #     rgb_values = output[y, x]  # Note: output[y, x] gives you [R, G, B]
+    #     # Print RGB values with high precision
+    #     print(f"Pixel{coords}: R={rgb_values[0]:.6f}, G={rgb_values[1]:.6f}, B={rgb_values[2]:.6f}")
 
     output = (output * 255.).round()
+    return output
+
 
 def load_model(model_path):
     global device
@@ -280,29 +282,28 @@ for idx, model in enumerate(models):
         # break
         convert_normal_map_generator(model, names[idx])
     elif idx == 1:
-        break
+        # break
         convert_roughness_displacement_generator(model, names[idx])
 
 
-# Lack of Post-Process in CoreML Tools
-def post_process_outputs(rlts, ishiiruka_texture_encoder=False):
-    normal_map = rlts[0]
-    roughness = rlts[1][:, :, 1]
-    displacement = rlts[1][:, :, 0]
+# def post_process_outputs(rlts, ishiiruka_texture_encoder=False):
+#     normal_map = rlts[0]
+#     roughness = rlts[1][:, :, 1]
+#     displacement = rlts[1][:, :, 0]
 
-    if ishiiruka_texture_encoder:
-        r = 255 - roughness
-        g = normal_map[:, :, 1]
-        b = displacement
-        a = normal_map[:, :, 2]
-        output = cv2.merge((b, g, r, a))
-        return output
-    else:
-        return {
-            "normal_map": normal_map,
-            "roughness": roughness,
-            "displacement": displacement
-        }
+#     if ishiiruka_texture_encoder:
+#         r = 255 - roughness
+#         g = normal_map[:, :, 1]
+#         b = displacement
+#         a = normal_map[:, :, 2]
+#         output = cv2.merge((b, g, r, a))
+#         return output
+#     else:
+#         return {
+#             "normal_map": normal_map,
+#             "roughness": roughness,
+#             "displacement": displacement
+#         }
 
 ## Make a prediction using CoreML ##
 # for idx, path in enumerate(images, 1):
