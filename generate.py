@@ -107,7 +107,7 @@ models = [
     ]
 
 for idx, path in enumerate(images, 1):
-    break
+    # break
     base = os.path.splitext(os.path.relpath(path, input_folder))[0]
     output_dir = os.path.dirname(os.path.join(output_folder, base))
     os.makedirs(output_dir, exist_ok=True)
@@ -174,9 +174,12 @@ imgShape = (1, 3, imgSize, imgSize)
 # imgShape = (imgSize, imgSize, 3) 
 example_input = torch.rand(*imgShape)  # Example input needed for tracing
 
-α = 0.0889850649
-β = 0.1348233757
-γ = 0.0566280158
+# α = 0.0889850649
+# β = 0.1348233757
+# γ = 0.0566280158
+α = 0.0
+β = 0.0
+γ = 0.0
 # https://apple.github.io/coremltools/docs-guides/source/image-inputs.html#preprocessing-for-torch
 scale = 1/(0.226*255.0)
 bias = [- (0.485 + α)/(0.229) , - (0.456 + β)/(0.224), - (0.406 + γ)/(0.225)]
@@ -227,18 +230,17 @@ def convert_normal_map_generator(torch_model, model_name):
       
     image_input=ct.ImageType(
         name="imageTexture", shape=example_input.shape, 
-        color_layout=ct.colorlayout.BGR, # no effects upon changing to BGR
+        color_layout=ct.colorlayout.BGR,
         bias=[-0.485/0.229,-0.456/0.224,-0.406/0.225], scale=1.0/255.0/0.226
     )
     coreml_model = ct.convert( 
         traced_model, 
         inputs=[image_input], 
-        outputs=[ct.ImageType(name="normalMap", color_layout=ct.colorlayout.BGR)], 
-        # add_custom_layers=True, # deprecated
-        # custom_conversion_functions={ "Lambda": convert_lambda }, # deprecated
+        # 'channel_first' must be None for an output of ImageType
+        outputs=[ct.ImageType(name="normalMap", color_layout=ct.colorlayout.BGR, channel_first=None)], 
         source='pytorch',  
         convert_to='mlprogram', 
-        compute_precision=ct.precision.FLOAT32,
+        compute_precision=ct.precision.FLOAT16,
         debug=True,
         minimum_deployment_target=ct.target.macOS14 
     )  
@@ -258,17 +260,19 @@ def convert_roughness_displacement_generator(torch_model, model_name):
 
     image_input=ct.ImageType(
         name="imageTexture", shape=example_input.shape, 
-        color_layout=ct.colorlayout.BGR, scale=scale, bias=bias
+        color_layout=ct.colorlayout.BGR, 
+        bias=[-0.485/0.229,-0.456/0.224,-0.406/0.225], scale=1.0/255.0/0.226
     )
     coreml_model = ct.convert( 
         traced_model, 
         inputs=[image_input], 
         outputs=[
-            ct.ImageType(name="frankenMap", color_layout=ct.colorlayout.RGB), # GRAYSCALE_FLOAT16
+            ct.ImageType(name="roughnessMap", color_layout=ct.colorlayout.BGR), # GRAYSCALE_FLOAT16
         ], 
         source='pytorch',  
         convert_to='mlprogram', 
-        minimum_deployment_target=ct.target.macOS13 
+        debug=True,
+        minimum_deployment_target=ct.target.macOS14
     )  
     coreml_model.save(f"{model_name}.mlpackage") 
     print(f"Model saved as {model_name}.mlpackage") 
@@ -280,10 +284,10 @@ def convert_roughness_displacement_generator(torch_model, model_name):
 for idx, model in enumerate(models): 
     names = ['NormalMapGenerator-CX-Lite_200000_G', 'FrankenMapGenerator-CX-Lite_215000_G'] 
     if idx == 0:
-        break
+        # break
         convert_normal_map_generator(model, names[idx])
     elif idx == 1:
-        break
+        # break
         convert_roughness_displacement_generator(model, names[idx])
 
 
@@ -342,10 +346,32 @@ for idx, path in enumerate(images, 1):
     coreml_output_image = coreml_output['normalMap']
 
     print(f"CoreML Output: {coreml_output_image}")
+    print(f"CoreML Output Image: {coreml_output_image.size}, Mode: {coreml_output_image.mode}")
 
     ## Post Processing
-    output_array = np.array(coreml_output_image)  # Convert PIL Image to NumPy array
-    # output_array = np.clip(output_array, 0, 1)  # Ensure values are between 0 and 1
+    coreml_output_array = np.array(coreml_output_image)  # Convert PIL Image to NumPy array
+    print(f"Output Array Shape: {coreml_output_array.shape}, Dtype: {coreml_output_array.dtype}")
+
+
+
+    # MARK: - Compare numerical output
+    print("\n\n- Compare Pytorch and CoreML outputs:")
+
+    input = img * 1. / np.iinfo(img.dtype).max
+    input = input[:, :, [2, 1, 0]]
+    input = torch.from_numpy(np.transpose(input, (2, 0, 1))).float()
+    img_LR = input.unsqueeze(0)
+    img_LR = img_LR.to(device)
+
+    pytorchModel = models[0] # Normal-map model
+    # torch_output = pytorchModel(img_LR).data.squeeze(0).float().cpu().clamp_(0, 1).numpy()
+    torch_output = pytorchModel(img_LR).data.cpu().numpy()
+    np.testing.assert_allclose(torch_output, coreml_output_array)
+    print("-------------------------------------------------\n")
+
+
+
+    # coreml_output_array = np.clip(coreml_output_array, 0, 1)  # Ensure values are between 0 and 1
     output_array = (output_array * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
 
     output_file_path = os.path.join(output_folder, f'{base}_coreML_normal_map.png')
