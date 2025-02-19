@@ -170,9 +170,11 @@ import coremltools as ct
 
 # TODO: Make flexible
 imgSize = 256 
-imgShape = (1, 3, imgSize, imgSize) 
+normal_imgShape = (1, 3, imgSize, imgSize) 
+roughness_imgShape = (1, 1, imgSize, imgSize) 
 # imgShape = (imgSize, imgSize, 3) 
-example_input = torch.rand(*imgShape)  # Example input needed for tracing
+example_input_normal = torch.rand(*normal_imgShape)  # Example input needed for tracing
+example_input_roughness = torch.rand(*roughness_imgShape)
 
 # α = 0.0889850649
 # β = 0.1348233757
@@ -225,11 +227,11 @@ bias = [- (0.485 + α)/(0.229) , - (0.456 + β)/(0.224), - (0.406 + γ)/(0.225)]
 
 
 def convert_normal_map_generator(torch_model, model_name): 
-    traced_model = torch.jit.trace(torch_model, example_input, strict=True) 
+    traced_model = torch.jit.trace(torch_model, example_input_normal, strict=True) 
     # traced_model.save(NORMAL_MAP_MODEL) # Optional, can pass traced model directly to converter.
       
     image_input=ct.ImageType(
-        name="imageTexture", shape=example_input.shape, 
+        name="imageTexture", shape=example_input_normal.shape, 
         color_layout=ct.colorlayout.BGR,
         bias=[-0.485/0.229,-0.456/0.224,-0.406/0.225], scale=1.0/255.0/0.226
     )
@@ -254,12 +256,12 @@ def convert_normal_map_generator(torch_model, model_name):
 def convert_roughness_displacement_generator(torch_model, model_name): 
     # for img in images_to_process:
     #     imgShape = img.shape[:2]
-    #     example_input = torch.tensor(img).permute(2, 0, 1).unsqueeze(0)  # Convert to correct shape
-    traced_model = torch.jit.trace(torch_model, example_input, strict=False) 
+    #     example_input_normal = torch.tensor(img).permute(2, 0, 1).unsqueeze(0)  # Convert to correct shape
+    traced_model = torch.jit.trace(torch_model, example_input_normal, strict=True) 
     # traced_model.save(OTHER_MAP_MODEL) # Optional, can pass traced model directly to converter.
 
     image_input=ct.ImageType(
-        name="imageTexture", shape=example_input.shape, 
+        name="imageTexture", shape=example_input_normal.shape, 
         color_layout=ct.colorlayout.BGR, 
         bias=[-0.485/0.229,-0.456/0.224,-0.406/0.225], scale=1.0/255.0/0.226
     )
@@ -267,7 +269,7 @@ def convert_roughness_displacement_generator(torch_model, model_name):
         traced_model, 
         inputs=[image_input], 
         outputs=[
-            ct.ImageType(name="roughnessMap", color_layout=ct.colorlayout.BGR), # GRAYSCALE_FLOAT16
+            ct.ImageType(name="roughnessMap", color_layout=ct.colorlayout.GRAYSCALE), # GRAYSCALE_FLOAT16
         ], 
         source='pytorch',  
         convert_to='mlprogram', 
@@ -285,6 +287,7 @@ for idx, model in enumerate(models):
     names = ['NormalMapGenerator-CX-Lite_200000_G', 'FrankenMapGenerator-CX-Lite_215000_G'] 
     if idx == 0:
         # break
+        # continue
         convert_normal_map_generator(model, names[idx])
     elif idx == 1:
         # break
@@ -326,6 +329,8 @@ coreml_model = ct.models.MLModel(f"{model_name}.mlpackage")
 from PIL import Image  # Import PIL for image 
 
 for idx, path in enumerate(images, 1):
+    # break
+
     base = os.path.splitext(os.path.relpath(path, input_folder))[0]
     output_dir = os.path.dirname(os.path.join(output_folder, base))
     os.makedirs(output_dir, exist_ok=True)
