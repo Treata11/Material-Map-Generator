@@ -108,6 +108,7 @@ models = [
 
 for idx, path in enumerate(images, 1):
     # break
+
     base = os.path.splitext(os.path.relpath(path, input_folder))[0]
     output_dir = os.path.dirname(os.path.join(output_folder, base))
     os.makedirs(output_dir, exist_ok=True)
@@ -230,16 +231,21 @@ def convert_normal_map_generator(torch_model, model_name):
     traced_model = torch.jit.trace(torch_model, example_input_normal, strict=True) 
     # traced_model.save(NORMAL_MAP_MODEL) # Optional, can pass traced model directly to converter.
       
-    image_input=ct.ImageType(
+    image_input=[ct.ImageType(
         name="imageTexture", shape=example_input_normal.shape, 
         color_layout=ct.colorlayout.BGR,
         bias=[-0.485/0.229,-0.456/0.224,-0.406/0.225], scale=1.0/255.0/0.226
-    )
+    )]
+    tensor_input= [ct.TensorType(name="imageTexture", shape=example_input_normal.shape, dtype=np.float16)]
+
+    image_output=[ct.ImageType(name="normalMap", color_layout=ct.colorlayout.BGR, channel_first=None)]
+    output_tensor = [ct.TensorType(name="normalMap", dtype=np.float32)]
+
     coreml_model = ct.convert( 
         traced_model, 
-        inputs=[image_input], 
+        inputs=image_input, 
         # 'channel_first' must be None for an output of ImageType
-        outputs=[ct.ImageType(name="normalMap", color_layout=ct.colorlayout.BGR, channel_first=None)], 
+        outputs=output_tensor, 
         source='pytorch',  
         convert_to='mlprogram', 
         compute_precision=ct.precision.FLOAT16,
@@ -326,6 +332,37 @@ for idx, model in enumerate(models):
 model_name = 'NormalMapGenerator-CX-Lite_200000_G'
 coreml_model = ct.models.MLModel(f"{model_name}.mlpackage")
 
+def convert_multiarray_output_to_image(spec, feature_name, feature_shape, is_bgr=False):
+    for output in spec.description.output:
+        if output.name != feature_name:
+            print('false feature_name')
+            continue
+
+        array_shape = feature_shape
+        _, _, height, width = array_shape
+        from coremltools.proto import FeatureTypes_pb2 as ft
+        output.type.imageType.colorSpace = ft.ImageFeatureType.ColorSpace.Value('BGR')
+        output.type.imageType.width = width
+        output.type.imageType.height = height
+        # output.type.imageType.
+
+        # channels, height, width = tuple(output.type.multiArrayType.shape)
+        # # Set image shape
+        # output.type.imageType.width = width 
+        # output.type.imageType.height = height
+
+spec = coreml_model.get_spec()
+print(spec.description.output[0].type)
+
+convert_multiarray_output_to_image(spec, "normalMap", (1, 4, imgSize, imgSize))
+
+print(spec.description.output[0].type)
+spec.description.output[0].type
+
+ct.utils.save_spec(spec, 'TensorsToImage.mlmodel')
+
+
+
 from PIL import Image  # Import PIL for image 
 
 for idx, path in enumerate(images, 1):
@@ -350,12 +387,15 @@ for idx, path in enumerate(images, 1):
 
     coreml_output_image = coreml_output['normalMap']
 
+    # np.set_printoptions(threshold=np.inf) 
     print(f"CoreML Output: {coreml_output_image}")
-    print(f"CoreML Output Image: {coreml_output_image.size}, Mode: {coreml_output_image.mode}")
+    # print(f"CoreML Output Image: {coreml_output_image.size}, Mode: {coreml_output_image.mode}")
 
     ## Post Processing
     coreml_output_array = np.array(coreml_output_image)  # Convert PIL Image to NumPy array
-    print(f"Output Array Shape: {coreml_output_array.shape}, Dtype: {coreml_output_array.dtype}")
+    # coreml_output_array = coreml_output_array[[2, 1, 0], :, :] # RGB to BGR
+    # coreml_output_array = np.transpose(coreml_output_array, (1, 2, 0)) 
+    # print(f"Output Array Shape: {coreml_output_array.shape}, Dtype: {coreml_output_array.dtype}")
 
 
 
@@ -368,18 +408,17 @@ for idx, path in enumerate(images, 1):
     img_LR = input.unsqueeze(0)
     img_LR = img_LR.to(device)
 
+
+    # coreml_output_array = np.clip(coreml_output_array, 0, 1)  # Ensure values are between 0 and 1
+    # output_array = (output_array * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
+
+    output_file_path = os.path.join(output_folder, f'{base}_coreML_normal_map.png')
+    cv2.imwrite(output_file_path, cv2.cvtColor(coreml_output_array, cv2.COLOR_RGBA2BGR))  # If output is RGBA
+
+    print(f"Saved output image: {output_file_path}")
+
     pytorchModel = models[0] # Normal-map model
     # torch_output = pytorchModel(img_LR).data.squeeze(0).float().cpu().clamp_(0, 1).numpy()
     torch_output = pytorchModel(img_LR).data.cpu().numpy()
     np.testing.assert_allclose(torch_output, coreml_output_array)
     print("-------------------------------------------------\n")
-
-
-
-    # coreml_output_array = np.clip(coreml_output_array, 0, 1)  # Ensure values are between 0 and 1
-    output_array = (output_array * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-
-    output_file_path = os.path.join(output_folder, f'{base}_coreML_normal_map.png')
-    cv2.imwrite(output_file_path, cv2.cvtColor(output_array, cv2.COLOR_RGBA2BGR))  # If output is RGBA
-
-    print(f"Saved output image: {output_file_path}")
